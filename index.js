@@ -538,39 +538,55 @@ export async function lyrics({ id }) {
 // device, so Spotify's app needn't be open. Its first start opens the browser
 // to sign in; it keeps the sign-in in the plugin's data.
 const localName = "MyGo Music";
-const librespotPaths = ["/opt/homebrew/bin/librespot", "/usr/local/bin/librespot"];
+// A build with the stream server, https://github.com/ybbapp/librespot, also
+// hands the app each track's audio to save, through the app's own downloads.
+// The stock Homebrew build only plays.
+const librespotPaths = [
+  { path: "/usr/local/bin/librespot", serves: true },
+  { path: "/opt/homebrew/bin/librespot", serves: false },
+];
+const streamPort = 43111;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let local = null;
+let localServes = false;
 
 function startLocal() {
   if (local) return local;
   local = (async () => {
-    let p;
-    for (const path of librespotPaths) {
+    for (const { path, serves } of librespotPaths) {
+      const args = [
+        "--name", localName, "--device-type", "computer", "--bitrate", "320",
+        "--disable-discovery", "--enable-oauth", "--system-cache", `${host.dataDir}/librespot`,
+      ];
+      if (serves) args.push("--stream-port", String(streamPort));
+      let p;
       try {
-        p = host.spawn(path, [
-          "--name", localName, "--device-type", "computer", "--bitrate", "320",
-          "--disable-discovery", "--enable-oauth", "--system-cache", `${host.dataDir}/librespot`,
-        ]);
-        break;
-      } catch {}
-    }
-    if (!p) return;
-    let ended = false;
-    p.wait().then(() => {
-      ended = true;
-      local = null;
-    });
-    // The app gives up on a call after 30 seconds. A sign-in that takes longer
-    // still lands: the device shows on the next play.
-    const until = Date.now() + 20000;
-    try {
-      while (!ended && Date.now() < until) {
-        const { devices } = await call("GET", "/me/player/devices");
-        if (devices.some((d) => d.name === localName)) return;
-        await sleep(1000);
+        p = host.spawn(path, args);
+      } catch {
+        continue;
       }
-    } catch {}
+      // The app gives up on a call after 30 seconds. A sign-in that takes
+      // longer still lands: the device shows on the next play.
+      let ended = false;
+      p.wait().then(() => {
+        ended = true;
+        local = null;
+      });
+      const until = Date.now() + 20000;
+      try {
+        while (!ended && Date.now() < until) {
+          const { devices } = await call("GET", "/me/player/devices");
+          if (devices.some((d) => d.name === localName)) {
+            localServes = serves;
+            return;
+          }
+          await sleep(1000);
+        }
+      } catch {}
+      // It ended before showing up: an option it doesn't know, say. Try the
+      // next build.
+      if (!ended) return;
+    }
   })();
   return local;
 }
@@ -702,4 +718,27 @@ export async function remoteDevices() {
 export async function remoteUse({ deviceId: id }) {
   await call("PUT", "/me/player", { body: { device_ids: [id] } });
   host.storage.set("device", id);
+}
+
+// Saving: the app's own downloads read this stream, from the librespot that is
+// playing. It's the original audio, not a re-encode, so what's saved is what
+// would have been heard. Only a build with the stream server has it; without
+// one, there's nothing to download and the menu says so.
+export async function stream({ id, quality }) {
+  if (!session()) throw fail("signIn");
+  await startLocal();
+  if (!localServes) {
+    throw fail(
+      "unsupported",
+      "Downloads need the librespot from https://github.com/ybbapp/librespot, at /usr/local/bin/librespot",
+    );
+  }
+  const uri = uriOf(id);
+  const query = new URLSearchParams({ uri, quality: musicQuality(quality) });
+  return { url: `http://127.0.0.1:${streamPort}/stream?${query}`, type: "ogg" };
+}
+
+// What the app calls a quality, as librespot asks Spotify for it.
+function musicQuality(quality) {
+  return quality === "standard" || quality === "lossless" ? quality : "high";
 }

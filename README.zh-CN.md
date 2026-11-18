@@ -45,6 +45,24 @@ librespot 在本机以 320 kbps 播放，设备名是 **MyGo Music**。没有其
 
 对部分账号，尤其是较新的账号，Spotify 会拒绝给 librespot 歌曲密钥，结果是什么都播不出来（[librespot#1649](https://github.com/librespot-org/librespot/issues/1649)）。遇到这种情况，改用 Spotify App 播放。
 
+## 下载
+
+播放和下载是分开的。播放照旧用上面的 librespot；下载走 MyGo Music 自带的下载功能——和其它音源一样的列表、队列和重试——但需要一个能把音频交出来的 librespot，即 `ybbapp/librespot`，它新增了 `--stream-port`。
+
+1. 编译并安装到 `/usr/local/bin/librespot`：
+
+   ```
+   git clone https://github.com/ybbapp/librespot
+   cd librespot
+   cargo build --release --features passthrough-decoder
+   sudo cp target/release/librespot /usr/local/bin/librespot
+   ```
+2. 在 MyGo Music 里照上文允许插件启动程序。
+
+之后歌曲菜单会出现 **Download…**，列表会出现 **Download Selected**。保存的是**原始音频**，不是二次转码：Spotify 发来怎样的 Ogg Vorbis，就存怎样的。播放不受影响——同一个 librespot 既播放也提供音频。
+
+没有这个构建时，插件仍可用 Homebrew 的 librespot 播放，但下载入口会提示需要上面的构建。
+
 ## MyGo Music Queue 歌单
 
 Spotify 桌面 App 不播放直接发给它的歌曲列表，只播放歌单或专辑。所以第一次播放时，插件会在你的曲库里建一个名为 **MyGo Music Queue** 的私密歌单。每次播放，插件把接下来要播的歌（最多 100 首）写进这个歌单，再播放它。MyGo Music 的侧边栏会隐藏它，Spotify 的 App 里能看到。不要编辑它：每次播放都会重写。如果删了，下次播放时插件会再建一个。

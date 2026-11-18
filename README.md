@@ -45,6 +45,24 @@ To sign librespot in with another account, quit MyGo Music, delete `~/Library/Ap
 
 For some accounts, newer ones especially, Spotify refuses librespot the keys to the songs, and it plays nothing ([librespot#1649](https://github.com/librespot-org/librespot/issues/1649)). Then play through Spotify's app.
 
+## Downloading
+
+Playing and downloading are separate. Playback uses the librespot above, as before. Downloading uses MyGo Music's own downloads — the same list, queue and retries as any other source — and needs a librespot that can hand the audio over: `ybbapp/librespot`, which adds a `--stream-port`.
+
+1. Build and install it at `/usr/local/bin/librespot`:
+
+   ```
+   git clone https://github.com/ybbapp/librespot
+   cd librespot
+   cargo build --release --features passthrough-decoder
+   sudo cp target/release/librespot /usr/local/bin/librespot
+   ```
+2. In MyGo Music, allow the plugin to start programs, as above.
+
+Then a song's menu offers **Download…**, and a list offers **Download Selected**. What's saved is the **original** audio, not a re-encode: Ogg Vorbis, exactly as Spotify sent it. Playback is unchanged — the same librespot plays and serves.
+
+Without that build the plugin still plays through Homebrew's librespot, but the download entries say the downloads need the build above.
+
 ## The MyGo Music Queue playlist
 
 Spotify's desktop app doesn't play a list of songs sent to it, only a playlist or an album. So the first time you play, the plugin makes a private playlist named **MyGo Music Queue** in your library, and each time you play it writes what's up next there, up to 100 songs, and plays it. MyGo Music hides it from its sidebar; Spotify's apps show it. Don't edit it: it's rewritten each time. If you delete it, the plugin makes a new one the next time you play.
