@@ -1,12 +1,12 @@
 {
   "id": "spotify",
   "name": "Spotify",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "main": "index.js",
-  "playback": "remote",
+  "playback": "stream",
   "permissions": {
-    "network": ["api.spotify.com", "accounts.spotify.com", "lrclib.net"],
-    "process": ["/opt/homebrew/bin/librespot", "/usr/local/bin/librespot"]
+    "network": ["api.spotify.com", "accounts.spotify.com", "lrclib.net", "127.0.0.1"],
+    "process": ["bin/helper", "bin/helper-*"]
   },
   "settings": [
     {

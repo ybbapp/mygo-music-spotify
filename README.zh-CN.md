@@ -2,9 +2,9 @@
 
 [English](README.md) | 简体中文
 
-在 [MyGo Music](https://github.com/egoist/mygo-music) 里浏览和控制 Spotify。本插件与 Spotify 无关，也未经其认可。
+在 [MyGo Music](https://github.com/egoist/mygo-music) 里浏览、播放和下载 Spotify。本插件与 Spotify 无关，也未经其认可。
 
-声音来自一台 Spotify Connect 设备：本机或手机上的 Spotify 官方 App、音箱，或你的账号能播放的其他设备。MyGo Music 负责展示你的曲库，并告诉那台设备播什么。装了 [librespot](https://github.com/librespot-org/librespot) 之后，本机不开 Spotify App 也能当作这样一台设备。
+插件使用 MyGo Music 自己的播放器。随插件分发的小型 Go 助手负责连接 Spotify、解密音频，并在 `127.0.0.1` 上提供 MP3 或 FLAC 流。Ogg 只作为内部源，最终不会作为播放或下载结果输出。不需要 Spotify 官方 App，也不需要用户另外安装 librespot。
 
 **播放需要 Spotify Premium。**
 
@@ -16,66 +16,55 @@
    http://127.0.0.1:43110/callback
    ```
 
-   必须一字不差：写成 `localhost` 或末尾多一个斜杠都不行。
-2. 用 deeplink 安装插件：
+2. 从 [ybbapp/mygo-music-spotify](https://github.com/ybbapp/mygo-music-spotify) 安装对应平台的 release。平台 zip 里已经包含 Go 助手。MyGo Music 询问时，允许插件启动程序。
 
-   [mygo-music://install-plugin?repo=xingkaixin/mygo-music-spotify](mygo-music://install-plugin?repo=xingkaixin/mygo-music-spotify)
+3. 在开发者后台的 App 页面复制 **Client ID**，粘贴到 MyGo Music 的插件设置里，点 **登录**，然后在浏览器里批准授权。
 
-   或者在 设置 > 插件 里粘贴 GitHub 地址：
+   如果之前装过旧版插件，请先退出再重新登录一次：新的登录会同时申请 Spotify 的 `streaming` 权限，这样助手可以尽量复用 Web 登录。
 
-   [https://github.com/xingkaixin/mygo-music-spotify](https://github.com/xingkaixin/mygo-music-spotify)
-3. 在开发者后台的 App 页面复制 **Client ID**，粘贴到 MyGo Music 里这个插件的设置中，点 **登录**，然后在浏览器里批准授权。
-4. 在某台设备上打开 Spotify，或者按下文配置 librespot，然后在 MyGo Music 里播放。想换设备，在播放器的设备菜单里选。
+4. 播放一首歌。插件会启动 Go 助手。如果 Spotify 要求单独授权音频，按提示打开一次配对页面并批准。之后助手会保存并复用这个音频登录。
 
 只有创建这个 App 的账号，以及被加进 App 的账号能登录。Spotify 的 Development Mode 最多允许 5 个账号。要加人，在后台打开这个 App，进入 **User Management**，填入对方账号的名字和邮箱。
 
-## 不开 Spotify App 播放
+## 工作方式
 
-1. 用 Homebrew 安装 librespot。插件只在 Homebrew 的目录里找它：`/opt/homebrew/bin` 和 `/usr/local/bin`。
+- `index.js` 是 MyGo Music 插件入口，保留 Web API 登录、曲库浏览、歌单、播客和歌词能力。
+- `helper/` 是 Go 二进制，复用 `go-librespot` 的 Spotify 登录、音频密钥、CDN 下载和 AES 解密。
+- 助手只在回环地址上提供 `GET /stream?uri=spotify:track:...&quality=high`。
+- `high` 从 Spotify 320k Ogg 源转成 MP3 320。
+- `lossless` 在 FLAC 密钥可用时直接返回原始 FLAC，否则回退 MP3 320。
+- `standard` 返回 MP3 160。Ogg 永远不会发给 MyGo Music。
+- 插件通过 `host.spawn` 启动助手；MyGo Music 退出时助手结束。
 
-   ```
-   brew install librespot
-   ```
-2. 在 MyGo Music 里打开 设置 > 插件 > Spotify，点 **允许启动程序**。
-3. 播放一首歌。第一次会在浏览器里打开一个 Spotify 页面，给 librespot 登录。这是独立于插件登录的另一次登录，用同一个账号批准。如果那首歌还没开始播，再点一次播放。
-
-librespot 在本机以 320 kbps 播放，设备名是 **MyGo Music**。没有其他设备在播、你也没在设备菜单里选过别的设备时，就用它。它在你第一次播放时启动，MyGo Music 退出时结束。
-
-要让 librespot 换一个账号：退出 MyGo Music，删除 `~/Library/Application Support/MyGo Music/plugin-data/spotify/librespot`，再播放一次。
-
-对部分账号，尤其是较新的账号，Spotify 会拒绝给 librespot 歌曲密钥，结果是什么都播不出来（[librespot#1649](https://github.com/librespot-org/librespot/issues/1649)）。遇到这种情况，改用 Spotify App 播放。
+本地流支持普通 HTTP 读取和 byte range。MyGo Music 的播放器和下载管理器使用同一个 URL，所以下载不需要另一套音频路径。
 
 ## 下载
 
-播放和下载是分开的。播放照旧用上面的 librespot；下载走 MyGo Music 自带的下载功能——和其它音源一样的列表、队列和重试——但需要一个能把音频交出来的 librespot，即 `ybbapp/librespot`，它新增了 `--stream-port`。
+歌曲菜单的 **Download…**、列表的 **Download Selected**、歌单的 **Download Playlist** 都读取同一条本地流。下载结果只会是 MP3 或 FLAC。`lossless` 优先原始 FLAC；如果 Spotify 拒绝 FLAC 密钥，自动回退 MP3 320；`high` 和 `standard` 使用 MP3。
 
-1. 编译并安装到 `/usr/local/bin/librespot`：
+## 从源码构建
 
-   ```
-   git clone https://github.com/ybbapp/librespot
-   cd librespot
-   cargo build --release --features passthrough-decoder
-   sudo cp target/release/librespot /usr/local/bin/librespot
-   ```
-2. 在 MyGo Music 里照上文允许插件启动程序。
+需要 Go 1.27 或更新版本。助手是纯 Go，不需要 libogg、libvorbis 或 Rust 工具链。
 
-之后歌曲菜单会出现 **Download…**，列表会出现 **Download Selected**。保存的是**原始音频**，不是二次转码：Spotify 发来怎样的 Ogg Vorbis，就存怎样的。播放不受影响——同一个 librespot 既播放也提供音频。
+```
+./scripts/build-helper.sh
+./scripts/package-release.sh
+```
 
-没有这个构建时，插件仍可用 Homebrew 的 librespot 播放，但下载入口会提示需要上面的构建。
-
-## MyGo Music Queue 歌单
-
-Spotify 桌面 App 不播放直接发给它的歌曲列表，只播放歌单或专辑。所以第一次播放时，插件会在你的曲库里建一个名为 **MyGo Music Queue** 的私密歌单。每次播放，插件把接下来要播的歌（最多 100 首）写进这个歌单，再播放它。MyGo Music 的侧边栏会隐藏它，Spotify 的 App 里能看到。不要编辑它：每次播放都会重写。如果删了，下次播放时插件会再建一个。
+`build-helper.sh` 生成 `bin/helper-<os>-<arch>`；`package-release.sh` 在 `dist/` 下生成平台 zip。GitHub release 会为 macOS、Linux 和 Windows 构建这些资产。
 
 ## 支持的功能
 
 - 首页：最近播放、常听歌曲、常听艺人、收藏的专辑
 - 搜索歌曲、专辑、艺人、歌单和播客
-- 专辑、艺人、你的歌单、喜欢的歌曲、收藏的专辑和播客
+- 专辑、艺人、歌单、喜欢的歌曲、收藏的专辑和播客
 - 喜欢歌曲，收藏专辑、歌单和播客
 - 新建、重命名、删除歌单，添加、移除、调整歌单里的歌曲顺序
-- 播放、暂停、拖动进度、音量、选择设备
+- 通过 MyGo Music 播放、暂停、拖动进度、上一首/下一首、队列、音量和可视化
+- 从同一条流下载歌曲和歌单
 - 来自 [LRCLIB](https://lrclib.net) 的滚动歌词（有收录时）
+
+这个模式没有 Spotify Connect 设备菜单：声音直接由 MyGo Music 播放。
 
 ## Spotify 不允许的功能
 
@@ -89,22 +78,20 @@ Spotify 给 Development Mode 应用开放的 Web API 比它自家 App 少：
 
 ## 常见问题
 
-下面加粗的是 Spotify 页面或 MyGo Music 里显示的原文。
+**Spotify audio sign-in is required**：打开插件提示里的配对网址，批准授权，然后重新播放。
 
-**Invalid redirect URI**（登录时 Spotify 页面显示）：后台里的 App 没有一字不差地填 `http://127.0.0.1:43110/callback`。补上、保存，再登录一次。
+**Spotify refused this account's audio key**：较新的 Spotify 账号可能被 Spotify 拒绝提供音频密钥（[librespot#1649](https://github.com/librespot-org/librespot/issues/1649)），目前没有已知绕过方法。
 
-**Spotify won't let this account in: add it under User Management in your app's dashboard, and check the app's owner has Premium**（登录后显示）：Spotify 的 Development Mode 只允许创建 App 的账号和加进 **User Management** 的账号使用，而且创建 App 的账号要有有效的 Premium。如果浏览器里登录的是另一个 Spotify 账号，先在浏览器里退出它。处理好对应的问题后，再登录一次。
-
-**Open Spotify on this computer, your phone or a speaker, then play again**：没有在线的 Spotify 设备。在某台设备上打开 Spotify App，或者配置 librespot。librespot 第一次登录完成后，再点一次播放。
+**lossless 下仍回退 MP3**：Spotify 可能列出了 FLAC 文件，却拒绝提供它的密钥。助手会自动从 Ogg 320 转成 MP3 320。
 
 **Playing through Spotify needs Premium**：登录的账号是 Spotify Free。
 
-**Spotify is limiting requests: try again in a moment**：Spotify 限制 Development Mode 应用的请求频率和总量。额度按你的开发者账号计算，所以多建一个 App 没用。等一会儿再试。
+**Spotify is limiting requests: try again in a moment**：Development Mode 有请求频率限制。等一会儿再试。
 
-**需要代理才能访问 Spotify 时，什么都加载不出来**：MyGo Music 和 librespot 直接连接 Spotify，不走系统代理设置。打开代理软件的 TUN 模式（有的叫增强模式）。
+**需要代理才能访问 Spotify 时，什么都加载不出来**：MyGo Music 和助手直接连接 Spotify，不走系统代理设置。打开代理软件的 TUN 模式（有的叫增强模式）。
 
 ## 隐私
 
-你的 Spotify token 以明文保存在本机的插件数据里，只发给 Spotify。退出登录会删除它们；librespot 的登录信息保存在插件数据的 `librespot` 文件夹里，删除前一直有效。要在 Spotify 那边撤销授权，到 Spotify 账号的 **Manage apps** 页面移除这个 App。
+你的 Spotify Web API token 以明文保存在本机的插件数据里，只发给 Spotify。助手自己的音频会话保存在同一数据目录下的 `spotify-audio/` 里；退出登录会清除它，删除这个目录也会忘记音频登录。要在 Spotify 那边撤销授权，到 Spotify 账号的 **Manage apps** 页面移除这个 App。
 
 每首歌的标题、艺人、专辑和时长会发给 LRCLIB 来查歌词。

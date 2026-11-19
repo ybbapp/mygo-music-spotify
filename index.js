@@ -3,6 +3,8 @@ const accounts = "https://accounts.spotify.com";
 const redirectPort = 43110;
 const redirectURI = `http://127.0.0.1:${redirectPort}/callback`;
 const scopes = [
+  "streaming",
+  "app-remote-control",
   "user-read-playback-state",
   "user-modify-playback-state",
   "user-read-recently-played",
@@ -57,6 +59,7 @@ function keep(tokens, previous = {}) {
     access: tokens.access_token,
     refresh: tokens.refresh_token || previous.refresh,
     expiresAt: Date.now() + tokens.expires_in * 1000,
+    scope: tokens.scope || previous.scope,
   };
   host.storage.set("session", s);
   return s;
@@ -176,16 +179,36 @@ export async function signIn() {
     throw new Error(answer.error === "access_denied" ? "Spotify sign-in was cancelled" : `Spotify: ${answer.error}`);
   }
   keep(await tokenRequest({ grant_type: "authorization_code", code: answer.code, redirect_uri: redirectURI, code_verifier: verifier }));
-  return account();
+  // Start the local audio sign-in now, so the browser pairing page is ready
+  // when the listener first plays. It must not make Web API sign-in fail.
+  const who = await account();
+  try {
+    const status = await startHelper();
+    if (!status.ready && status.auth?.state === "login_required") promptAudioAuth(status.auth);
+  } catch {}
+  return who;
 }
 
-export function signOut() {
+export async function signOut() {
   endSession();
   host.storage.remove("device");
+  try {
+    await Promise.race([
+      fetch(helperURL("/logout"), { method: "POST" }),
+      sleep(500),
+    ]);
+  } catch {}
+  if (helperProcess) {
+    try {
+      helperProcess.kill();
+    } catch {}
+    helperProcess = null;
+  }
+  helperStarting = null;
 }
 
-export function setSetting({ key }) {
-  if (key === "clientId") signOut();
+export async function setSetting({ key }) {
+  if (key === "clientId") await signOut();
 }
 
 export async function account() {
@@ -531,211 +554,166 @@ export async function lyrics({ id }) {
   return found.syncedLyrics ? { lrc: found.syncedLyrics } : {};
 }
 
-// Playing, on a Spotify Connect device: Spotify's own apps, a speaker, or
-// anything else the account can play on.
-
-// librespot, once installed and allowed, plays on this computer as its own
-// device, so Spotify's app needn't be open. Its first start opens the browser
-// to sign in; it keeps the sign-in in the plugin's data.
-const localName = "MyGo Music";
-// A build with the stream server, https://github.com/ybbapp/librespot, also
-// hands the app each track's audio to save, through the app's own downloads.
-// The stock Homebrew build only plays.
-const librespotPaths = [
-  { path: "/usr/local/bin/librespot", serves: true },
-  { path: "/opt/homebrew/bin/librespot", serves: false },
-];
-const streamPort = 43111;
+// Playback and downloads both read the Go helper's local audio stream. The
+// helper exposes MP3 or FLAC, never Ogg: high uses MP3 320, lossless prefers
+// Spotify's original FLAC and falls back to MP3.
+const helperPort = 43111;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-let local = null;
-let localServes = false;
+let helperProcess = null;
+let helperStarting = null;
 
-function startLocal() {
-  if (local) return local;
-  local = (async () => {
-    for (const { path, serves } of librespotPaths) {
-      const args = [
-        "--name", localName, "--device-type", "computer", "--bitrate", "320",
-        "--disable-discovery", "--enable-oauth", "--system-cache", `${host.dataDir}/librespot`,
-      ];
-      if (serves) args.push("--stream-port", String(streamPort));
-      let p;
-      try {
-        p = host.spawn(path, args);
-      } catch {
-        continue;
-      }
-      // The app gives up on a call after 30 seconds. A sign-in that takes
-      // longer still lands: the device shows on the next play.
-      let ended = false;
-      p.wait().then(() => {
-        ended = true;
-        local = null;
-      });
-      const until = Date.now() + 20000;
-      try {
-        while (!ended && Date.now() < until) {
-          const { devices } = await call("GET", "/me/player/devices");
-          if (devices.some((d) => d.name === localName)) {
-            localServes = serves;
-            return;
-          }
-          await sleep(1000);
-        }
-      } catch {}
-      // It ended before showing up: an option it doesn't know, say. Try the
-      // next build.
-      if (!ended) return;
-    }
-  })();
-  return local;
+function helperURL(path) {
+  return `http://127.0.0.1:${helperPort}${path}`;
 }
 
-async function deviceId() {
-  await startLocal();
-  const { devices } = await call("GET", "/me/player/devices");
-  const usable = devices.filter((d) => d.id && !d.is_restricted);
-  const chosen = host.storage.get("device");
-  const d =
-    usable.find((x) => x.is_active) ||
-    usable.find((x) => x.id === chosen) ||
-    usable.find((x) => x.name === localName) ||
-    usable[0];
-  if (!d) throw new Error(noDevice);
-  return d.id;
-}
-
-// Spotify goes on through the songs it's given by itself. A window of them
-// keeps the request small; when it runs out, the app asks for the next ones.
-const playWindow = 100;
-
-// Spotify's desktop app takes a list of songs to play (`uris`) and then plays
-// nothing, while it plays a playlist from any of its songs. So the queue is
-// written to a playlist of the listener's own and played from there. It stays
-// in their library: Spotify turns down changes to one they don't follow.
-async function queuePlaylist() {
-  const me = host.storage.get("me");
-  const known = host.storage.get("queue");
-  if (known?.owner === me) return known.id;
-  const p = await call("POST", "/me/playlists", {
-    body: { name: "MyGo Music Queue", public: false, description: "What MyGo Music plays. It's rewritten each time you play." },
-  });
-  host.storage.set("queue", { owner: me, id: p.id });
-  return p.id;
-}
-
-// Once the listener deletes it, Spotify answers 404 to changing it, so a new
-// one takes its place.
-async function fillQueue(uris) {
-  const write = async () => {
-    const id = await queuePlaylist();
-    await call("PUT", `/playlists/${id}/items`, { body: { uris } });
-    return id;
-  };
+async function helperHealth(timeout = 900) {
   try {
-    return await write();
-  } catch (e) {
-    if (e.status !== 404) throw e;
-    host.storage.remove("queue");
-    return write();
-  }
-}
-
-// The last answer about what plays, for while Spotify asks to wait.
-let last = null;
-let quietUntil = 0;
-
-export async function remotePlay({ ids, start, position }) {
-  last = null;
-  const [queue, device] = await Promise.all([fillQueue(ids.slice(start, start + playWindow).map(uriOf)), deviceId()]);
-  await call("PUT", "/me/player/play", {
-    query: { device_id: device },
-    body: { context_uri: `spotify:playlist:${queue}`, offset: { position: 0 }, position_ms: position },
-  });
-}
-
-export async function remotePause() {
-  last = null;
-  await call("PUT", "/me/player/pause");
-}
-
-export async function remoteResume() {
-  last = null;
-  await call("PUT", "/me/player/play");
-}
-
-export async function remoteSeek({ position }) {
-  last = null;
-  await call("PUT", "/me/player/seek", { query: { position_ms: position } });
-}
-
-export async function remoteVolume({ percent }) {
-  await call("PUT", "/me/player/volume", { query: { volume_percent: percent } });
-}
-
-function guess() {
-  const { state, at } = last;
-  if (!state.playing) return state;
-  return { ...state, position: Math.min(state.position + Date.now() - at, state.duration || Infinity) };
-}
-
-// The app asks about once a second, and stops after a few failed answers,
-// though Spotify plays on. While Spotify asks to wait, the last answer goes on
-// by the clock.
-export async function remoteState() {
-  if (last && Date.now() < quietUntil) return guess();
-  let p;
-  try {
-    p = await call("GET", "/me/player", { query: { additional_types: "episode" } });
-  } catch (e) {
-    if (!e.retryAfter || !last) throw e;
-    quietUntil = Date.now() + e.retryAfter * 1000;
-    return guess();
-  }
-  if (!p) {
-    last = null;
+    const res = await Promise.race([
+      fetch(helperURL("/health")),
+      sleep(timeout).then(() => {
+        throw new Error("audio helper did not answer");
+      }),
+    ]);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
     return null;
   }
-  const item = p.item;
-  const state = {
-    playing: p.is_playing,
-    trackId: item ? (p.currently_playing_type === "episode" ? episodeId(item.id) : item.id) : "",
-    position: p.progress_ms ?? 0,
-    duration: item?.duration_ms ?? 0,
-    volume: p.device?.volume_percent ?? 100,
-    device: p.device?.name,
-  };
-  last = { state, at: Date.now() };
-  return state;
 }
 
-export async function remoteDevices() {
-  await startLocal();
-  const { devices } = await call("GET", "/me/player/devices");
-  return devices.filter((d) => d.id && !d.is_restricted).map((d) => ({ id: d.id, name: d.name, active: d.is_active }));
+function helperCandidates() {
+  const platform = host.platform;
+  const arch = host.arch;
+  const ext = platform === "windows" ? ".exe" : "";
+  return [
+    `bin/helper-${platform}-${arch}${ext}`,
+    `bin/helper-${platform}${ext}`,
+    `bin/helper${ext}`,
+  ];
 }
 
-export async function remoteUse({ deviceId: id }) {
-  await call("PUT", "/me/player", { body: { device_ids: [id] } });
-  host.storage.set("device", id);
+function promptAudioAuth(auth) {
+  host.signInPrompt({
+    qr: auth.url || undefined,
+    text: auth.code ? `Approve Spotify audio in your browser with code ${auth.code}` : "Approve Spotify audio in your browser",
+  });
+  if (auth.url) host.openURL(auth.url);
 }
 
-// Saving: the app's own downloads read this stream, from the librespot that is
-// playing. It's the original audio, not a re-encode, so what's saved is what
-// would have been heard. Only a build with the stream server has it; without
-// one, there's nothing to download and the menu says so.
-export async function stream({ id, quality }) {
-  if (!session()) throw fail("signIn");
-  await startLocal();
-  if (!localServes) {
+function startHelper() {
+  if (helperStarting) return helperStarting;
+  helperStarting = (async () => {
+    let status = await helperHealth();
+    if (status) return status;
+
+    let lastError = null;
+    for (const path of helperCandidates()) {
+      try {
+        const p = host.spawn(path, [
+          "--port", String(helperPort),
+          "--data-dir", `${host.dataDir}/spotify-audio`,
+          "--token-stdin",
+        ]);
+        helperProcess = p;
+        let token = {};
+        try {
+          const s = session();
+          const hasStreaming = String(s?.scope || "").split(/\s+/).includes("streaming");
+          if (s && hasStreaming) token = { accessToken: await accessToken(), username: host.storage.get("me") || "" };
+        } catch {}
+        try {
+          p.write(JSON.stringify(token) + "\n");
+        } catch {}
+        p.wait().then(() => {
+          if (helperProcess === p) helperProcess = null;
+          helperStarting = null;
+        });
+        break;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (!helperProcess) {
+      throw fail(
+        "unsupported",
+        `Spotify audio helper isn't installed for ${host.platform}-${host.arch}${lastError ? `: ${lastError.message}` : ""}`,
+      );
+    }
+
+    for (let i = 0; i < 25; i++) {
+      status = await helperHealth(400);
+      if (status) return status;
+      await sleep(150);
+    }
+    throw fail("unsupported", "Spotify audio helper did not start");
+  })()
+    .catch((e) => {
+      if (helperProcess) {
+        try {
+          helperProcess.kill();
+        } catch {}
+        helperProcess = null;
+      }
+      throw e;
+    })
+    .finally(() => {
+      helperStarting = null;
+    });
+  return helperStarting;
+}
+
+async function waitForAudio(status) {
+  let prompted = false;
+  let restarted = false;
+  for (let i = 0; i < 96; i++) {
+    if (status?.ready) return status;
+    const auth = status?.auth || {};
+    if (auth.state === "error") {
+      if (!restarted) {
+        restarted = true;
+        try {
+          await fetch(helperURL("/auth/start?new=1"), { method: "POST" });
+        } catch {}
+        await sleep(500);
+        status = await helperHealth(500);
+        if (!status) throw fail("unavailable", "Spotify audio helper stopped unexpectedly");
+        continue;
+      }
+      throw fail("unsupported", auth.error || "Spotify audio failed to start");
+    }
+    if (auth.state === "login_required" && !prompted) {
+      prompted = true;
+      promptAudioAuth(auth);
+    }
+    await sleep(250);
+    status = await helperHealth(500);
+    if (!status) throw fail("unavailable", "Spotify audio helper stopped unexpectedly");
+  }
+  const auth = status?.auth || {};
+  if (auth.state === "login_required") {
     throw fail(
-      "unsupported",
-      "Downloads need the librespot from https://github.com/ybbapp/librespot, at /usr/local/bin/librespot",
+      "signIn",
+      auth.code
+        ? `Approve Spotify audio in your browser with code ${auth.code}, then play again`
+        : "Approve Spotify audio in your browser, then play again",
     );
   }
+  throw fail("unavailable", auth.error || "Spotify audio is still starting: try again");
+}
+
+// The app's player and download manager read this same MP3/FLAC stream.
+export async function stream({ id, quality }) {
+  if (!session()) throw fail("signIn");
+  await waitForAudio(await startHelper());
   const uri = uriOf(id);
   const query = new URLSearchParams({ uri, quality: musicQuality(quality) });
-  return { url: `http://127.0.0.1:${streamPort}/stream?${query}`, type: "ogg" };
+  const url = helperURL(`/stream?${query}`);
+  const probe = await fetch(url, { method: "HEAD" });
+  if (!probe.ok) {
+    const reason = await probe.text().catch(() => "");
+    throw fail(probe.status === 401 ? "signIn" : "unavailable", reason || `Spotify stream: ${probe.status}`);
+  }
+  return { url, type: (probe.headers.get("x-audio-type") || "mp3").toLowerCase() };
 }
 
 // What the app calls a quality, as librespot asks Spotify for it.

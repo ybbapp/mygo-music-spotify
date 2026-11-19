@@ -2,6 +2,11 @@
 
 > 本文档用于新会话：从零独立实现一个「完美适配」的 Spotify 插件。
 > 现状仓库已与上游 `xingkaixin/mygo-music-spotify` 解除 fork 关系，可自由改写。
+>
+> 当前实现（2026-11-19）：已按选项 B 改成 `playback: "stream"`，插件为 JS 外壳 +
+> 随包分发的 Go 助手。Go 助手复用 `go-librespot` 的登录、音频密钥、CDN 下载和
+> AES 解密；播放与下载只输出 MP3/FLAC，Ogg 仅作为内部源，不向 MyGo 输出。
+> Spotify Connect 不接入。
 
 ## 0. 一句话目标
 
@@ -19,7 +24,7 @@
 
 | 组件 | 位置 | 状态 |
 |---|---|---|
-| 插件仓库 | `src/mygo-music-spotify`（`ybbapp/mygo-music-spotify`） | v0.2.0，`playback: "remote"`，已解除 fork |
+| 插件仓库 | `src/mygo-music-spotify`（`ybbapp/mygo-music-spotify`） | v0.4.0，`playback: "stream"`，已解除 fork |
 | librespot fork | `src/librespot`（`ybbapp/librespot`），dev 分支有 `feat/stream-server` PR #2 | 新增 `--stream-port` 本地流服务 |
 | 已装 librespot | `/usr/local/bin/librespot` | 带 `--stream-port`（ad-hoc 构建） |
 | 宿主 | `src/mygo/mygo-music`（`ybbapp/mygo-music`） | 已放宽 `canDownload`：远程源只要 `can("stream")` 即可下载 |
@@ -112,7 +117,7 @@
 
 - [ ] 断网/未登录时有清晰提示，不白屏。
 - [ ] 播放：暂停、±跳转、上下首、队列、歌词、可视化全部正常。
-- [ ] 下载：右键 `Download…`、`Download Selected`、`Download Playlist` 均可用；副档名 `.ogg`，与原音频逐字节一致（除头包重封装）。
+- [ ] 下载：右键 `Download…`、`Download Selected`、`Download Playlist` 均可用；输出只能是 MP3 或 FLAC。`high` 输出 MP3 320，`lossless` 优先原始 FLAC，FLAC 密钥不可用时回退 MP3 320；不再输出 Ogg。
 - [ ] 首字节延迟 < 1s（流式，非整首缓冲）。
 - [ ] 拖动进度条可 seek（助手支持 Range）。
 - [ ] 卸载 librespot/清空缓存后，重装插件仍可一键可用。

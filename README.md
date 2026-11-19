@@ -2,9 +2,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Browse and control Spotify from [MyGo Music](https://github.com/egoist/mygo-music). It isn't affiliated with or endorsed by Spotify.
+Browse, play and download Spotify from [MyGo Music](https://github.com/egoist/mygo-music). It isn't affiliated with or endorsed by Spotify.
 
-The sound comes from a Spotify Connect device: Spotify's own app on this computer or your phone, a speaker, or anything else your account plays on. MyGo Music shows your library and tells that device what to play. With [librespot](https://github.com/librespot-org/librespot) installed, this computer is such a device without Spotify's app open.
+The plugin uses MyGo Music's own player. A small Go helper bundled with the plugin talks to Spotify, decrypts the audio, and serves MP3 or FLAC on `127.0.0.1`. Ogg is an internal source only and is never offered as a playback or download result. Spotify's app and a separately installed librespot are not needed.
 
 **Playing needs Spotify Premium.**
 
@@ -16,66 +16,55 @@ The sound comes from a Spotify Connect device: Spotify's own app on this compute
    http://127.0.0.1:43110/callback
    ```
 
-   Type it exactly: `localhost`, or a slash at the end, doesn't match.
-2. Install the plugin with the deeplink:
+2. Install a release from [ybbapp/mygo-music-spotify](https://github.com/ybbapp/mygo-music-spotify). The platform zip contains the Go helper for that platform. When MyGo Music asks, allow the plugin to start programs.
 
-   [mygo-music://install-plugin?repo=xingkaixin/mygo-music-spotify](mygo-music://install-plugin?repo=xingkaixin/mygo-music-spotify)
+3. Copy the **Client ID** from the app's page in the dashboard, paste it in the plugin's settings, then click **Sign In** and approve access in your browser.
 
-   Or paste the GitHub URL in Settings > Plugins:
+   If you used an older version of this plugin, sign out and in once: the new login also asks for Spotify's `streaming` scope, which lets the helper reuse the Web login when possible.
 
-   [https://github.com/xingkaixin/mygo-music-spotify](https://github.com/xingkaixin/mygo-music-spotify)
-3. Copy the **Client ID** from the app's page in the dashboard. In MyGo Music, paste it in the plugin's settings, click **Sign In** and approve access in your browser.
-4. Open Spotify on a device, or set up librespot as below, then play something in MyGo Music. Choose another device from the player's device menu.
+4. Play something. The plugin starts its Go helper. If Spotify asks for audio access separately, approve the pairing page once. The helper then keeps that login and reuses it.
 
 Only the account that made the app, and the accounts added to it, can sign in. Spotify's Development Mode lets in five at most. To add one, open the app in the dashboard, go to **User Management**, and enter the account's name and email.
 
-## Playing without Spotify's app
+## How it works
 
-1. Install librespot with Homebrew. The plugin looks for it in Homebrew's folders, `/opt/homebrew/bin` and `/usr/local/bin`.
+- `index.js` is the MyGo Music plugin entry. It keeps the Web API session, library browsing, playlists, podcasts and lyrics.
+- `helper/` is a Go binary. It reuses `go-librespot` for Spotify login, audio keys, CDN reads and AES decryption.
+- The helper serves `GET /stream?uri=spotify:track:...&quality=high` on loopback only.
+- `high` serves MP3 320, transcoded from Spotify's 320 kbps Ogg source.
+- `lossless` serves Spotify's original FLAC when its key is available, otherwise MP3 320.
+- `standard` serves MP3 160. Ogg is never sent to MyGo Music.
+- The plugin starts the helper with `host.spawn`. The helper ends with the plugin.
 
-   ```
-   brew install librespot
-   ```
-2. In MyGo Music, open Settings > Plugins > Spotify and allow it to start programs.
-3. Play something. The first time, your browser opens a Spotify page to sign librespot in. It's a sign-in of its own, apart from the plugin's: approve it with the same account. If the song hasn't started by then, play it again.
-
-librespot plays on this computer at 320 kbps, as the device **MyGo Music**. It's used when no other device is playing and you haven't chosen another in the device menu. It starts with the first song you play and stops when MyGo Music quits.
-
-To sign librespot in with another account, quit MyGo Music, delete `~/Library/Application Support/MyGo Music/plugin-data/spotify/librespot`, and play again.
-
-For some accounts, newer ones especially, Spotify refuses librespot the keys to the songs, and it plays nothing ([librespot#1649](https://github.com/librespot-org/librespot/issues/1649)). Then play through Spotify's app.
+The stream supports normal HTTP reads and byte ranges. MyGo Music's player and download manager use the same URL, so downloads do not need a second audio path.
 
 ## Downloading
 
-Playing and downloading are separate. Playback uses the librespot above, as before. Downloading uses MyGo Music's own downloads — the same list, queue and retries as any other source — and needs a librespot that can hand the audio over: `ybbapp/librespot`, which adds a `--stream-port`.
+A song's **Download…**, a list's **Download Selected** and a playlist's **Download Playlist** use the same local stream as playback. Downloads are always MP3 or FLAC. `lossless` prefers original FLAC and falls back to MP3 320 if Spotify refuses the FLAC key; `high` and `standard` use MP3.
 
-1. Build and install it at `/usr/local/bin/librespot`:
+## Build from source
 
-   ```
-   git clone https://github.com/ybbapp/librespot
-   cd librespot
-   cargo build --release --features passthrough-decoder
-   sudo cp target/release/librespot /usr/local/bin/librespot
-   ```
-2. In MyGo Music, allow the plugin to start programs, as above.
+Building needs Go 1.27 or newer. The helper is pure Go; it does not need libogg, libvorbis or a Rust toolchain.
 
-Then a song's menu offers **Download…**, and a list offers **Download Selected**. What's saved is the **original** audio, not a re-encode: Ogg Vorbis, exactly as Spotify sent it. Playback is unchanged — the same librespot plays and serves.
+```
+./scripts/build-helper.sh
+./scripts/package-release.sh
+```
 
-Without that build the plugin still plays through Homebrew's librespot, but the download entries say the downloads need the build above.
-
-## The MyGo Music Queue playlist
-
-Spotify's desktop app doesn't play a list of songs sent to it, only a playlist or an album. So the first time you play, the plugin makes a private playlist named **MyGo Music Queue** in your library, and each time you play it writes what's up next there, up to 100 songs, and plays it. MyGo Music hides it from its sidebar; Spotify's apps show it. Don't edit it: it's rewritten each time. If you delete it, the plugin makes a new one the next time you play.
+`build-helper.sh` writes `bin/helper-<os>-<arch>`. `package-release.sh` writes a platform zip under `dist/`. GitHub releases build these for macOS, Linux and Windows.
 
 ## What works
 
-- Home, made of your recently played songs, top tracks, top artists and saved albums
+- Home, made of recently played songs, top tracks, top artists and saved albums
 - Search for songs, albums, artists, playlists and podcasts
-- Albums, artists, your playlists, liked songs, saved albums and podcasts
+- Albums, artists, playlists, liked songs, saved albums and podcasts
 - Liking songs, saving albums, playlists and podcasts
 - Creating, renaming and deleting playlists, and adding, removing and reordering their songs
-- Play, pause, seek, volume and choosing a device
+- Play, pause, seek, previous/next, queue, volume and visualizers through MyGo Music
+- Downloading songs and playlists from the same stream
 - Timed lyrics from [LRCLIB](https://lrclib.net), when it has them
+
+There is no Spotify Connect device menu in this mode: playback happens in MyGo Music itself.
 
 ## What Spotify doesn't let it do
 
@@ -89,20 +78,20 @@ Spotify's Web API gives apps in Development Mode less than its own apps have:
 
 ## When something goes wrong
 
-**Invalid redirect URI**, on Spotify's page when you sign in: the app in the dashboard doesn't have `http://127.0.0.1:43110/callback` exactly. Add it, save, and sign in again.
+**Spotify audio sign-in is required**: open the pairing URL shown in the plugin prompt, approve access, then play again.
 
-**Spotify won't let this account in: add it under User Management in your app's dashboard, and check the app's owner has Premium**, right after you sign in: Spotify's Development Mode lets in only the account that made the app and the accounts added under **User Management**, and only while the account that made the app has Premium. If your browser was signed in to Spotify with another account, sign out of it there first. Fix whichever applies, then sign in again.
+**Spotify refused this account's audio key**: newer Spotify accounts can be blocked from librespot's audio-key flow ([librespot#1649](https://github.com/librespot-org/librespot/issues/1649)). No workaround is known.
 
-**Open Spotify on this computer, your phone or a speaker, then play again**: no Spotify device is online. Open Spotify's app on one, or set up librespot. Right after librespot's first sign-in, play again.
+**FLAC falls back to MP3 even on `lossless`**: Spotify can list a FLAC file but still refuse its key. The helper automatically retries from Ogg 320 as MP3 320.
 
 **Playing through Spotify needs Premium**: the account you signed in with is on Spotify Free.
 
-**Spotify is limiting requests: try again in a moment**: Spotify limits how often an app in Development Mode asks, and how much in all. It counts for your developer account, so making another app doesn't help. Wait, then try again.
+**Spotify is limiting requests: try again in a moment**: Spotify limits how often a Development Mode app asks. Wait, then try again.
 
-**Nothing loads, where Spotify needs a proxy**: MyGo Music and librespot connect to Spotify directly and don't use the system proxy setting. Turn on your proxy's TUN mode, sometimes called enhanced mode.
+**Nothing loads, where Spotify needs a proxy**: MyGo Music and its helper connect to Spotify directly. Turn on your proxy's TUN mode, sometimes called enhanced mode.
 
 ## Privacy
 
-Your Spotify tokens are kept unencrypted in the plugin's data on this machine and are sent only to Spotify. Signing out forgets them; librespot's sign-in stays in the plugin's data, in the `librespot` folder, until you delete it. To revoke access on Spotify's side, remove the app on your Spotify account's **Manage apps** page.
+Your Spotify Web API tokens are kept unencrypted in the plugin's data on this machine and are sent only to Spotify. The helper stores its own audio session under `spotify-audio/` in that same data directory. Signing out clears it; deleting `spotify-audio/` also forgets it. To revoke access on Spotify's side, remove the app on your Spotify account's **Manage apps** page.
 
 Each song's title, artist, album and length go to LRCLIB to find its lyrics.
