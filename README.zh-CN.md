@@ -26,6 +26,19 @@
 
 只有创建这个 App 的账号，以及被加进 App 的账号能登录。Spotify 的 Development Mode 最多允许 5 个账号。要加人，在后台打开这个 App，进入 **User Management**，填入对方账号的名字和邮箱。
 
+## 与原版 v0.2.0 的区别
+
+| | 原版 v0.2.0 | 当前版本 |
+|---|---|---|
+| 播放模式 | `remote`：MyGo 遥控 Spotify Connect 设备 | `stream`：MyGo 自己播放 |
+| 音频来源 | Spotify 官方 App 或外部 librespot | 插件自带的 Go helper |
+| 安装 | 需要安装 librespot；下载还要特殊 Rust 构建 | 平台 zip 自带 helper |
+| 下载 | 从特殊 librespot 接口保存原始 Ogg | 只保存 MP3 或 FLAC；Ogg 仅内部使用 |
+| 设备菜单 | 可以选择 Spotify Connect 设备 | 没有设备菜单 |
+| 手机 Spotify App | 可以看到并遥控 Connect 设备 | 看不到，也不能遥控 MyGo |
+| 队列 | 使用私密歌单 “MyGo Music Queue” | 由 MyGo 自己管理队列 |
+| 登录 | Web API 登录 + librespot 登录 | Web 登录 + helper 音频登录，尽量复用 token |
+
 ## 工作方式
 
 - `index.js` 是 MyGo Music 插件入口，保留 Web API 登录、曲库浏览、歌单、播客和歌词能力。

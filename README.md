@@ -26,6 +26,19 @@ The plugin uses MyGo Music's own player. A small Go helper bundled with the plug
 
 Only the account that made the app, and the accounts added to it, can sign in. Spotify's Development Mode lets in five at most. To add one, open the app in the dashboard, go to **User Management**, and enter the account's name and email.
 
+## Differences from the original v0.2.0
+
+| | Original v0.2.0 | This release |
+|---|---|---|
+| Playback | `remote`: MyGo controlled a Spotify Connect device | `stream`: MyGo plays the audio |
+| Audio source | Spotify's app or an external librespot | A Go helper shipped with the plugin |
+| Install | Required librespot; downloads required a custom Rust build | The platform zip contains the helper |
+| Downloads | Original Ogg from the custom librespot endpoint | MP3 or FLAC only; Ogg is an internal source |
+| Device menu | Spotify Connect devices could be chosen | No device menu |
+| Phone Spotify app | Could see and control the Connect device | Cannot see or control MyGo |
+| Queue | Used a private "MyGo Music Queue" playlist | MyGo manages its own queue |
+| Login | Web API login plus a separate librespot login | Web login plus helper audio login, reusing the token when possible |
+
 ## How it works
 
 - `index.js` is the MyGo Music plugin entry. It keeps the Web API session, library browsing, playlists, podcasts and lyrics.
