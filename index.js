@@ -585,11 +585,17 @@ function helperCandidates() {
   const platform = host.platform;
   const arch = host.arch;
   const ext = platform === "windows" ? ".exe" : "";
-  return [
+  const candidates = [
     `bin/helper-${platform}-${arch}${ext}`,
     `bin/helper-${platform}${ext}`,
     `bin/helper${ext}`,
   ];
+  if (platform === "windows" && arch === "arm64") {
+    // Windows on ARM can run x64 binaries, so an x64 helper is a usable
+    // fallback when a release only ships it.
+    candidates.push("bin/helper-windows-amd64.exe");
+  }
+  return candidates;
 }
 
 function promptAudioAuth(auth) {
@@ -606,12 +612,15 @@ function startHelper() {
     let status = await helperHealth();
     if (status) return status;
 
-    let lastError = null;
+    const failures = [];
     for (const path of helperCandidates()) {
+      let p = null;
+      let ended = false;
+      let exitCode = null;
       try {
-        const p = host.spawn(path, [
+        p = host.spawn(path, [
           "--port", String(helperPort),
-          "--data-dir", `${host.dataDir}/spotify-audio`,
+          "--data-dir", `${host.dataDir}${host.dataDir.includes("\\") ? "\\" : "/"}spotify-audio`,
           "--token-stdin",
         ]);
         helperProcess = p;
@@ -624,28 +633,46 @@ function startHelper() {
         try {
           p.write(JSON.stringify(token) + "\n");
         } catch {}
-        p.wait().then(() => {
+        p.wait().then((code) => {
+          ended = true;
+          exitCode = code;
           if (helperProcess === p) helperProcess = null;
           helperStarting = null;
         });
-        break;
       } catch (e) {
-        lastError = e;
+        failures.push(`${path}: ${e.message || e}`);
+        continue;
       }
-    }
-    if (!helperProcess) {
-      throw fail(
-        "unsupported",
-        `Spotify audio helper isn't installed for ${host.platform}-${host.arch}${lastError ? `: ${lastError.message}` : ""}`,
-      );
-    }
 
-    for (let i = 0; i < 25; i++) {
-      status = await helperHealth(400);
-      if (status) return status;
-      await sleep(150);
+      for (let i = 0; i < 40; i++) {
+        if (ended) break;
+        status = await helperHealth(400);
+        if (status) return status;
+        await sleep(125);
+      }
+      if (ended) {
+        let detail = "";
+        try {
+          detail = String(p.errorOutput?.() || "").trim();
+        } catch {}
+        failures.push(`${path}: exited with code ${exitCode ?? "?"}${detail ? `: ${detail}` : ""}`);
+        helperProcess = null;
+        continue;
+      }
+      let detail = "";
+      try {
+        detail = String(p.errorOutput?.() || "").trim();
+      } catch {}
+      failures.push(`${path}: started but /health did not answer${detail ? `: ${detail}` : ""}`);
+      try {
+        p.kill();
+      } catch {}
+      helperProcess = null;
     }
-    throw fail("unsupported", "Spotify audio helper did not start");
+    throw fail(
+      "unsupported",
+      `Spotify audio helper could not start on ${host.platform}-${host.arch}: ${failures.join("; ") || "no helper candidates"}`,
+    );
   })()
     .catch((e) => {
       if (helperProcess) {

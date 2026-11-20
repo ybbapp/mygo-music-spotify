@@ -64,7 +64,7 @@
 ./scripts/package-release.sh
 ```
 
-`build-helper.sh` 生成 `bin/helper-<os>-<arch>`；`package-release.sh` 在 `dist/` 下生成平台 zip。GitHub release 会为 macOS、Linux 和 Windows 构建这些资产。
+`build-helper.sh` 生成 `bin/helper-<os>-<arch>`；`package-release.sh` 在 `dist/` 下生成平台 zip。GitHub release 会为 macOS、Linux 和 Windows 构建这些资产，包括 Windows ARM64。
 
 ## 支持的功能
 
@@ -92,6 +92,8 @@ Spotify 给 Development Mode 应用开放的 Web API 比它自家 App 少：
 ## 常见问题
 
 **Spotify audio sign-in is required**：打开插件提示里的配对网址，批准授权，然后重新播放。
+
+**Spotify audio helper could not start**：现在会列出尝试过的每个 helper 路径以及各自失败的原因。Windows 上请确认插件目录里有 `bin\helper-windows-amd64.exe`，并且 MyGo 已允许插件启动程序。
 
 **Spotify refused this account's audio key**：较新的 Spotify 账号可能被 Spotify 拒绝提供音频密钥（[librespot#1649](https://github.com/librespot-org/librespot/issues/1649)），目前没有已知绕过方法。
 

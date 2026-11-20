@@ -64,7 +64,7 @@ Building needs Go 1.27 or newer. The helper is pure Go; it does not need libogg,
 ./scripts/package-release.sh
 ```
 
-`build-helper.sh` writes `bin/helper-<os>-<arch>`. `package-release.sh` writes a platform zip under `dist/`. GitHub releases build these for macOS, Linux and Windows.
+`build-helper.sh` writes `bin/helper-<os>-<arch>`. `package-release.sh` writes a platform zip under `dist/`. GitHub releases build these for macOS, Linux and Windows, including Windows ARM64.
 
 ## What works
 
@@ -92,6 +92,8 @@ Spotify's Web API gives apps in Development Mode less than its own apps have:
 ## When something goes wrong
 
 **Spotify audio sign-in is required**: open the pairing URL shown in the plugin prompt, approve access, then play again.
+
+**Spotify audio helper could not start**: the message now lists each helper path it tried and why that one failed. On Windows, check that `bin\helper-windows-amd64.exe` exists under the plugin folder and that the app is allowed to start programs.
 
 **Spotify refused this account's audio key**: newer Spotify accounts can be blocked from librespot's audio-key flow ([librespot#1649](https://github.com/librespot-org/librespot/issues/1649)). No workaround is known.
 

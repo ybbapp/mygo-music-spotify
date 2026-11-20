@@ -135,7 +135,7 @@ func (s *audioServer) health() healthResponse {
 		OK:        true,
 		Ready:     ready,
 		Auth:      auth,
-		Version:   "0.4.0",
+		Version:   "0.4.1",
 		Timestamp: time.Now().Unix(),
 	}
 }

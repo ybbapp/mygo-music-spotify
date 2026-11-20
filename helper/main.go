@@ -27,7 +27,7 @@ func main() {
 	if *dataDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatal(err)
+			home = os.TempDir()
 		}
 		*dataDir = filepath.Join(home, ".local", "share", "mygo-music-spotify")
 	}
@@ -35,12 +35,45 @@ func main() {
 		log.Fatal(err)
 	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	if logFile, err := os.OpenFile(filepath.Join(*dataDir, "helper.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+		defer logFile.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+	}
 	lg := logger{}
 	manager, err := newSessionManager(*dataDir, lg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer manager.stop()
+	server, err := newAudioServer(*dataDir, lg, manager)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
+	if err != nil {
+		log.Fatal(err)
+	}
+	actualPort := listener.Addr().(*net.TCPAddr).Port
+	lg.Infof("Spotify audio helper listening on 127.0.0.1:%d", actualPort)
+
+	httpServer := &http.Server{
+		Handler:           server,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- httpServer.Serve(listener) }()
+
+	// Open the health endpoint before waiting for a token: on Windows a
+	// delayed token refresh must not look like a helper that never started.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdown)
+	}()
 	if *tokenStdin {
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -56,33 +89,8 @@ func main() {
 			manager.setWebToken(tok.AccessToken, tok.Username)
 		}
 	}
-
-	server, err := newAudioServer(*dataDir, lg, manager)
-	if err != nil {
-		log.Fatal(err)
-	}
 	manager.start(false)
-
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
-	if err != nil {
-		log.Fatal(err)
-	}
-	actualPort := listener.Addr().(*net.TCPAddr).Port
-	lg.Infof("Spotify audio helper listening on 127.0.0.1:%d", actualPort)
-
-	httpServer := &http.Server{
-		Handler:           server,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpServer.Shutdown(shutdown)
-	}()
-	if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+	if err := <-serveErr; err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 	server.Close()
