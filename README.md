@@ -75,7 +75,17 @@ Building needs Go 1.27 or newer. The helper is pure Go; it does not need libogg,
 - Creating, renaming and deleting playlists, and adding, removing and reordering their songs
 - Play, pause, seek, previous/next, queue, volume and visualizers through MyGo Music
 - Downloading songs and playlists from the same stream
-- Timed lyrics from [LRCLIB](https://lrclib.net), when it has them
+- Timed lyrics from [LRCLIB](https://lrclib.net), when it has them, with an optional second language
+
+## Translated lyrics
+
+LRCLIB often only has lyrics in the song's own language. Turn on **Translate lyrics with AI** in the plugin's settings to show a second line under each original line:
+
+1. If LRCLIB has synced lyrics already in the listener's language, those are shown as the translation.
+2. Otherwise, if the original is not in the listener's language, the plugin asks the configured AI service to translate it.
+3. If the AI service fails or takes too long, only the original lyrics are shown; playback and downloads are never affected.
+
+The AI settings are an OpenAI-compatible **Responses API** base URL (`https://api.openai.com/v1` by default), an API key, and a model name. The plugin sends `POST {baseUrl}/responses` with `Authorization: Bearer {apiKey}` and batches at most 100 lyric lines per request. A whole translated song is cached, so it is not paid for twice.
 
 There is no Spotify Connect device menu in this mode: playback happens in MyGo Music itself.
 
@@ -105,8 +115,10 @@ Spotify's Web API gives apps in Development Mode less than its own apps have:
 
 **Nothing loads, where Spotify needs a proxy**: MyGo Music and its helper connect to Spotify directly. Turn on your proxy's TUN mode, sometimes called enhanced mode.
 
+**No translated lyrics appear**: check that **Translate lyrics with AI** is on, and that the base URL, key and model are filled in. A failed AI request only drops the translation, so the original lyrics still show.
+
 ## Privacy
 
 Your Spotify Web API tokens are kept unencrypted in the plugin's data on this machine and are sent only to Spotify. The helper stores its own audio session under `spotify-audio/` in that same data directory. Signing out clears it; deleting `spotify-audio/` also forgets it. To revoke access on Spotify's side, remove the app on your Spotify account's **Manage apps** page.
 
-Each song's title, artist, album and length go to LRCLIB to find its lyrics.
+Each song's title, artist, album and length go to LRCLIB to find its lyrics. With AI translation on, the original lyric lines also go to the AI base URL you configured, which may be a third-party service; they are not sent anywhere when it is off.

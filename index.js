@@ -537,7 +537,8 @@ export async function subscribeShow({ id, on }) {
   await setSaved(`spotify:show:${id}`, on);
 }
 
-// Lyrics, from LRCLIB: the Web API has none.
+// Lyrics, from LRCLIB: the Web API has none. A translation may come from
+// another LRCLIB entry, or from the listener's AI service when enabled.
 
 export async function lyrics({ id }) {
   if (id.startsWith("episode:")) return {};
@@ -548,10 +549,214 @@ export async function lyrics({ id }) {
     album_name: t.album?.name || "",
     duration: String(Math.round(t.duration_ms / 1000)),
   });
-  const res = await fetch(`https://lrclib.net/api/get?${query}`, { headers: { "user-agent": "mygo-music-spotify/0.1.1" } });
-  if (!res.ok) return {};
+  let found;
+  try {
+    const res = await timedFetch(`https://lrclib.net/api/get?${query}`, { headers: { "user-agent": "mygo-music-spotify/0.4.2" } }, 8000);
+    if (!res.ok) return {};
+    found = await res.json();
+  } catch {
+    return {};
+  }
+  if (!found.syncedLyrics) return {};
+
+  const lang = (host.language() || "en").toLowerCase();
+  const lrc = found.syncedLyrics;
+  if (lang.startsWith("zh") && isMostlyCJK(lrc)) return { lrc };
+
+  const cached = cachedTranslation(id, lang);
+  if (cached) return { lrc, translation: cached };
+
+  // A translation is a bonus: anything that goes wrong leaves the original
+  // lyrics alone, and never breaks the player.
+  try {
+    const libraryTranslation = lang.startsWith("zh") ? await lrclibChinese(t) : "";
+    if (libraryTranslation) {
+      rememberTranslation(id, lang, libraryTranslation);
+      return { lrc, translation: libraryTranslation };
+    }
+    const translated = await aiTranslation(id, lang, lrc);
+    if (translated) return { lrc, translation: translated };
+  } catch {}
+  return { lrc };
+}
+
+async function timedFetch(url, options, ms) {
+  return Promise.race([
+    fetch(url, options),
+    sleep(ms).then(() => {
+      throw new Error("lyrics request timed out");
+    }),
+  ]);
+}
+
+function isCJK(ch) {
+  const code = ch.codePointAt(0);
+  return (
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xf900 && code <= 0xfaff)
+  );
+}
+
+function isMostlyCJK(text) {
+  let total = 0;
+  for (const ch of text) {
+    if (/\s/.test(ch) || /[\[\]0-9:.\-]/.test(ch)) continue;
+    total++;
+  }
+  if (total === 0) return false;
+  let cjk = 0;
+  for (const ch of text) {
+    if (isCJK(ch)) cjk++;
+  }
+  return cjk / total >= 0.3;
+}
+
+const lrcLine = /^(\[[^\]]+\])+(.*)$/;
+
+function lrcEntries(lrc) {
+  return lrc
+    .split(/\r?\n/)
+    .map((line, i) => {
+      const m = line.match(lrcLine);
+      return m ? { i, prefix: line.slice(0, line.length - m[2].length), text: m[2] } : { i, prefix: "", text: "" };
+    })
+    .filter((e) => e.text.trim() !== "");
+}
+
+function rebuildLRC(lrc, translated) {
+  const lines = lrc.split(/\r?\n/);
+  for (const [i, text] of translated) {
+    const m = lines[i]?.match(lrcLine);
+    if (m) lines[i] = lines[i].slice(0, lines[i].length - m[2].length) + text;
+  }
+  return lines.join("\n");
+}
+
+function cacheKey(id, lang, model) {
+  return `lyrics:${id}:${lang}:${model || "default"}`;
+}
+
+function cachedTranslation(id, lang) {
+  const model = (host.setting("aiModel") || "").trim();
+  let value = host.storage.get(cacheKey(id, lang, model));
+  if (!value && model) {
+    // Lyrics found in LRCLIB are cached before a model is chosen; reuse them.
+    value = host.storage.get(cacheKey(id, lang, ""));
+  }
+  return typeof value === "string" && value.includes("[") ? value : "";
+}
+
+function rememberTranslation(id, lang, lrc) {
+  const model = (host.setting("aiModel") || "").trim();
+  try {
+    host.storage.set(cacheKey(id, lang, model), lrc);
+  } catch {}
+}
+
+async function lrclibChinese(t) {
+  const q = `${t.name} ${t.artists[0]?.name || ""}`.trim();
+  const res = await timedFetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
+    headers: { "user-agent": "mygo-music-spotify/0.4.2" },
+  }, 8000);
+  if (!res.ok) return "";
   const found = await res.json();
-  return found.syncedLyrics ? { lrc: found.syncedLyrics } : {};
+  for (const item of Array.isArray(found) ? found.slice(0, 10) : []) {
+    if (item?.syncedLyrics && isMostlyCJK(item.syncedLyrics)) return item.syncedLyrics;
+  }
+  return "";
+}
+
+const aiBudgetMs = 20000;
+const aiBatchMs = 25000;
+const aiBatchLines = 100;
+
+async function aiTranslation(id, lang, lrc) {
+  if (host.setting("aiTranslate") !== "true") return "";
+  const base = (host.setting("aiBaseUrl") || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const key = host.setting("aiApiKey") || "";
+  const model = (host.setting("aiModel") || "").trim();
+  if (!key || !model) return "";
+
+  const entries = lrcEntries(lrc);
+  if (!entries.length) return "";
+  const translated = new Map();
+  const deadline = Date.now() + aiBudgetMs;
+  for (let start = 0; start < entries.length; start += aiBatchLines) {
+    const left = deadline - Date.now();
+    if (left <= 1000) break;
+    const batch = entries.slice(start, start + aiBatchLines);
+    const timeout = Math.min(aiBatchMs, left);
+    const part = await translateBatch(base, key, model, lang, batch, timeout);
+    for (const item of part) translated.set(item.i - 1, item.text);
+  }
+  if (!translated.size) return "";
+  const out = rebuildLRC(lrc, translated);
+  rememberTranslation(id, lang, out);
+  return out;
+}
+
+async function translateBatch(base, key, model, lang, batch, timeout) {
+  const numbered = batch.map((e) => `${e.i + 1}. ${e.text}`).join("\n");
+  const target = lang.startsWith("zh") ? "Simplified Chinese" : lang;
+  const prompt =
+    `Translate these song lyric lines into ${target}. Keep the meaning, tone and line order. ` +
+    `Return only JSON: {"lines":[{"i":<line number>,"text":"<translation>"}]}. ` +
+    `Include every line exactly once.\n\n${numbered}`;
+  try {
+    const res = await Promise.race([
+      fetch(`${base}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          input: prompt,
+        }),
+      }),
+      sleep(timeout).then(() => {
+        throw new Error("AI lyric translation timed out");
+      }),
+    ]);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const text = responseText(data);
+    const parsed = parseLinesJSON(text);
+    return parsed.filter((item) => Number.isInteger(item.i) && typeof item.text === "string" && batch.some((e) => e.i + 1 === item.i));
+  } catch {
+    return [];
+  }
+}
+
+function responseText(data) {
+  if (typeof data?.output_text === "string") return data.output_text;
+  const chunks = [];
+  for (const item of data?.output || []) {
+    for (const c of item?.content || []) {
+      if (typeof c?.text === "string") chunks.push(c.text);
+    }
+  }
+  return chunks.join("\n");
+}
+
+function parseLinesJSON(text) {
+  const raw = String(text || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  try {
+    const data = JSON.parse(raw);
+    return Array.isArray(data?.lines) ? data.lines : [];
+  } catch {
+    const at = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (at < 0 || end <= at) return [];
+    try {
+      const data = JSON.parse(raw.slice(at, end + 1));
+      return Array.isArray(data?.lines) ? data.lines : [];
+    } catch {
+      return [];
+    }
+  }
 }
 
 // Playback and downloads both read the Go helper's local audio stream. The

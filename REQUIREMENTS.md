@@ -24,7 +24,7 @@
 
 | 组件 | 位置 | 状态 |
 |---|---|---|
-| 插件仓库 | `src/mygo-music-spotify`（`ybbapp/mygo-music-spotify`） | v0.4.1，`playback: "stream"`，已解除 fork |
+| 插件仓库 | `src/mygo-music-spotify`（`ybbapp/mygo-music-spotify`） | v0.4.2，`playback: "stream"`，已解除 fork |
 | librespot fork | `src/librespot`（`ybbapp/librespot`），dev 分支有 `feat/stream-server` PR #2 | 新增 `--stream-port` 本地流服务 |
 | 已装 librespot | `/usr/local/bin/librespot` | 带 `--stream-port`（ad-hoc 构建） |
 | 宿主 | `src/mygo/mygo-music`（`ybbapp/mygo-music`） | 已放宽 `canDownload`：远程源只要 `can("stream")` 即可下载 |

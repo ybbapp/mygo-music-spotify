@@ -1,11 +1,11 @@
 {
   "id": "spotify",
   "name": "Spotify",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "main": "index.js",
   "playback": "stream",
   "permissions": {
-    "network": ["api.spotify.com", "accounts.spotify.com", "lrclib.net", "127.0.0.1"],
+    "network": ["*"],
     "process": ["bin/helper", "bin/helper-*"]
   },
   "settings": [
@@ -14,6 +14,30 @@
       "label": "Client ID",
       "help": "Create an app in Spotify's developer dashboard with the redirect URI http://127.0.0.1:43110/callback and Web API ticked, then paste its Client ID here.",
       "link": "https://developer.spotify.com/dashboard"
+    },
+    {
+      "key": "aiTranslate",
+      "label": "Translate lyrics with AI",
+      "help": "When LRCLIB has no synced lyrics in your language, send the original lyrics to the AI service below for translation. Off by default.",
+      "type": "boolean"
+    },
+    {
+      "key": "aiBaseUrl",
+      "label": "AI Base URL",
+      "help": "An OpenAI-compatible Responses API base URL, such as https://api.openai.com/v1.",
+      "type": "text"
+    },
+    {
+      "key": "aiApiKey",
+      "label": "AI API Key",
+      "help": "Sent only to the AI Base URL above, as an Authorization: Bearer header.",
+      "type": "password"
+    },
+    {
+      "key": "aiModel",
+      "label": "AI Model",
+      "help": "The model name used by that Responses API.",
+      "type": "text"
     }
   ]
 }

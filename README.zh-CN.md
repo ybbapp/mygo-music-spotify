@@ -75,7 +75,17 @@
 - 新建、重命名、删除歌单，添加、移除、调整歌单里的歌曲顺序
 - 通过 MyGo Music 播放、暂停、拖动进度、上一首/下一首、队列、音量和可视化
 - 从同一条流下载歌曲和歌单
-- 来自 [LRCLIB](https://lrclib.net) 的滚动歌词（有收录时）
+- 来自 [LRCLIB](https://lrclib.net) 的滚动歌词（有收录时），可显示第二语言译文
+
+## 歌词翻译
+
+LRCLIB 经常只有歌曲原语言的歌词。在插件设置中打开 **Translate lyrics with AI**，每行原文下方就会显示译文：
+
+1. 如果 LRCLIB 已有当前语言（例如中文）的同步歌词，直接用作译文。
+2. 否则，如果原文不是当前语言，插件会把原文交给配置的 AI 服务翻译。
+3. AI 失败或超时只显示原文，不影响播放和下载。
+
+AI 设置包括兼容 OpenAI 的 **Responses API** 地址（默认 `https://api.openai.com/v1`）、API Key 和模型名。插件会向 `{baseUrl}/responses` 发送 `POST`，带 `Authorization: Bearer {apiKey}`，每次最多翻译 100 行歌词。整首译文会缓存，避免重复调用和重复收费。
 
 这个模式没有 Spotify Connect 设备菜单：声音直接由 MyGo Music 播放。
 
@@ -105,8 +115,10 @@ Spotify 给 Development Mode 应用开放的 Web API 比它自家 App 少：
 
 **需要代理才能访问 Spotify 时，什么都加载不出来**：MyGo Music 和助手直接连接 Spotify，不走系统代理设置。打开代理软件的 TUN 模式（有的叫增强模式）。
 
+**没有显示译文**：确认已打开 **Translate lyrics with AI**，并填好地址、API Key 和模型。即使 AI 失败也只会丢掉译文，原文歌词照常显示。
+
 ## 隐私
 
 你的 Spotify Web API token 以明文保存在本机的插件数据里，只发给 Spotify。助手自己的音频会话保存在同一数据目录下的 `spotify-audio/` 里；退出登录会清除它，删除这个目录也会忘记音频登录。要在 Spotify 那边撤销授权，到 Spotify 账号的 **Manage apps** 页面移除这个 App。
 
-每首歌的标题、艺人、专辑和时长会发给 LRCLIB 来查歌词。
+每首歌的标题、艺人、专辑和时长会发给 LRCLIB 来查歌词。打开 AI 翻译后，歌词原文还会发给你配置的 AI 地址；如果那是第三方服务，请自行确认其隐私政策。关闭 AI 翻译时不会发送。
